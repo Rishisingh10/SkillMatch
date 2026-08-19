@@ -443,12 +443,7 @@ If you intend to make the project open source, consider adding an appropriate li
 
 ---
 
-## 👨‍💻 Author
 
-**Rishisingh10**
-
-GitHub:
-https://github.com/Rishisingh10
 
 ---
 
