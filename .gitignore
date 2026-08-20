@@ -1,0 +1,14 @@
+## Ignore Visual Studio / .NET build outputs
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+.idea/
+.vscode/
+*.user
+*.userosscache
+*.sln.docstates
+appsettings.Development.json
+wwwroot/uploads/*
+!wwwroot/uploads/.gitkeep

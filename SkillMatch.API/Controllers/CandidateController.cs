@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +8,7 @@ using SkillMatch.API.Services;
 
 namespace SkillMatch.API.Controllers;
 
+[Authorize(Roles = "CANDIDATE,ADMIN")]
 [Route("api/[controller]")]
 [ApiController]
 public class CandidateController : ControllerBase
@@ -49,17 +51,25 @@ public class CandidateController : ControllerBase
             return NotFound("Candidate or Job record not found.");
         }
 
-        var candidateSkillNames = candidate.CandidateSkills
-            .Select(cs => cs.Skill.Name)
+        var candidateSkills = candidate.CandidateSkills
+            .Select(cs => new CandidateSkillInput
+            {
+                SkillName = cs.Skill.Name,
+                YearsExperience = cs.YearsExperience ?? candidate.TotalExperienceYears ?? 0
+            })
             .ToList();
 
-        var requiredSkillNames = job.JobSkills
-            .Select(js => js.Skill.Name)
+        var requiredJobSkills = job.JobSkills
+            .Select(js => new JobSkillInput
+            {
+                SkillName = js.Skill.Name,
+                IsMandatory = js.IsMandatory ?? true
+            })
             .ToList();
 
-        var report = _matcher.Evaluate(
-            candidateSkillNames,
-            requiredSkillNames,
+        var report = _matcher.EvaluateDetailed(
+            candidateSkills,
+            requiredJobSkills,
             candidate.TotalExperienceYears ?? 0,
             job.MinExperienceYears ?? 0
         );
@@ -73,13 +83,16 @@ public class CandidateController : ControllerBase
             {
                 OverallScore = report.OverallScore,
                 SkillMatchScore = report.SkillScore,
-                ExperienceFitScore = report.ExperienceScore
+                ExperienceFitScore = report.ExperienceScore,
+                SkillProficiencyScore = report.SkillProficiencyScore,
+                HasAllMandatorySkills = report.HasAllMandatorySkills
             },
 
             SkillBreakdown = new
             {
                 MatchedSkills = report.MatchedSkills,
-                MissingSkills = report.MissingSkills
+                MissingSkills = report.MissingSkills,
+                MissingMandatorySkills = report.MissingMandatorySkills
             },
 
             Explanation = report.Explanation
@@ -95,17 +108,24 @@ public class CandidateController : ControllerBase
     {
         // 1. Check candidate
         var candidate = await _context.CandidateProfiles
-            .FindAsync(candidateId);
+            .Include(c => c.CandidateSkills)
+            .FirstOrDefaultAsync(c => c.Id == candidateId);
 
         if (candidate == null)
         {
             return NotFound("Candidate profile not found.");
         }
 
-        // 2. Check file
+        // 2. Check file presence and 10MB size limit
         if (file == null || file.Length == 0)
         {
             return BadRequest("No file was uploaded.");
+        }
+
+        const long maxSizeBytes = 10 * 1024 * 1024; // 10 MB
+        if (file.Length > maxSizeBytes)
+        {
+            return BadRequest("File size exceeds maximum limit of 10MB.");
         }
 
         // 3. Check extension
@@ -117,11 +137,23 @@ public class CandidateController : ControllerBase
 
         if (!allowedExtensions.Contains(extension))
         {
-            return BadRequest(
-                "Invalid file format. Only PDF and DOCX files are allowed.");
+            return BadRequest("Invalid file format. Only PDF and DOCX files are allowed.");
         }
 
-        // 4. Create uploads folder
+        // 4. Validate header / magic bytes
+        using (var checkStream = file.OpenReadStream())
+        {
+            if (extension == ".pdf" && !_parser.ValidatePdfHeader(checkStream))
+            {
+                return BadRequest("Invalid PDF file header signature detected.");
+            }
+            if (extension == ".docx" && !_parser.ValidateDocxHeader(checkStream))
+            {
+                return BadRequest("Invalid DOCX file header signature detected.");
+            }
+        }
+
+        // 5. Create uploads folder
         var uploadsFolder = Path.Combine(
             _environment.ContentRootPath,
             "wwwroot",
@@ -129,76 +161,80 @@ public class CandidateController : ControllerBase
 
         Directory.CreateDirectory(uploadsFolder);
 
-        // 5. Generate safe unique filename
-        var uniqueFileName =
-            $"{Guid.NewGuid()}{extension}";
-
-        var filePath = Path.Combine(
-            uploadsFolder,
-            uniqueFileName);
-
         // 6. Save file
+        var uniqueFileName = $"{Guid.NewGuid()}{extension}";
+        var filePath = Path.Combine(uploadsFolder, uniqueFileName);
+
         string extractedText;
 
-        using (var stream = new FileStream(
-            filePath,
-            FileMode.Create,
-            FileAccess.Write))
+        using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
         {
             await file.CopyToAsync(stream);
         }
 
-        // 7. Open saved file and parse it
-        using (var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read))
+        // 7. Parse text
+        using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
         {
-            if (extension == ".pdf")
+            extractedText = extension == ".pdf"
+                ? _parser.ExtractTextFromPdf(stream)
+                : _parser.ExtractTextFromDocx(stream);
+        }
+
+        // 8. Extract skills automatically from parsed text against global taxonomy
+        var knownSkillEntities = await _context.Skills.ToListAsync();
+        var knownSkillNames = knownSkillEntities.Select(s => s.Name).ToList();
+
+        var extractedSkills = _parser.ExtractSkillsFromText(extractedText, knownSkillNames);
+
+        // Add auto-extracted skills to CandidateSkills if not already present
+        var existingSkillIds = candidate.CandidateSkills.Select(cs => cs.SkillId).ToHashSet();
+        int newSkillsAdded = 0;
+
+        foreach (var extractedSkillName in extractedSkills)
+        {
+            var skillEntity = knownSkillEntities.FirstOrDefault(s =>
+                s.Name.Equals(extractedSkillName, StringComparison.OrdinalIgnoreCase));
+
+            if (skillEntity != null && !existingSkillIds.Contains(skillEntity.Id))
             {
-                extractedText =
-                    _parser.ExtractTextFromPdf(stream);
-            }
-            else
-            {
-                extractedText =
-                    _parser.ExtractTextFromDocx(stream);
+                _context.CandidateSkills.Add(new CandidateSkill
+                {
+                    CandidateId = candidateId,
+                    SkillId = skillEntity.Id,
+                    YearsExperience = candidate.TotalExperienceYears ?? 1.0m,
+                    IsVerifiedByUser = false
+                });
+                newSkillsAdded++;
             }
         }
 
-        // 8. Save metadata to database
+        // 9. Save resume record & newly extracted skills
         var resumeRecord = new Resume
         {
             CandidateId = candidateId,
             FileName = file.FileName,
             FilePath = filePath,
-            FileType = extension == ".pdf"
-                ? "PDF"
-                : "DOCX",
-            FileSizeKb = (uint)Math.Ceiling(
-                file.Length / 1024.0),
+            FileType = extension == ".pdf" ? "PDF" : "DOCX",
+            FileSizeKb = (uint)Math.Ceiling(file.Length / 1024.0),
             ParsedRawText = extractedText,
             ParsingStatus = "COMPLETED"
         };
 
         _context.Resumes.Add(resumeRecord);
-
         await _context.SaveChangesAsync();
 
-        // 9. Return result
-        var previewLength = Math.Min(
-            extractedText.Length,
-            200);
+        // 10. Return result
+        var previewLength = Math.Min(extractedText.Length, 200);
 
         return Ok(new
         {
-            Message = "Resume uploaded and parsed successfully.",
+            Message = "Resume uploaded, verified, and parsed successfully.",
             ResumeId = resumeRecord.Id,
             FileName = resumeRecord.FileName,
             FileType = resumeRecord.FileType,
-            ExtractedTextPreview =
-                extractedText.Substring(0, previewLength)
-                + (extractedText.Length > 200 ? "..." : "")
+            ExtractedTextPreview = extractedText.Substring(0, previewLength) + (extractedText.Length > 200 ? "..." : ""),
+            ExtractedSkills = extractedSkills,
+            NewSkillsAddedToProfile = newSkillsAdded
         });
     }
 }

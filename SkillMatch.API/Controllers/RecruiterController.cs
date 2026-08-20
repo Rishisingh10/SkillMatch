@@ -1,20 +1,23 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SkillMatch.API.Models;
 using SkillMatch.API.Services;
 
 namespace SkillMatch.API.Controllers;
 
+[Authorize(Roles = "RECRUITER,ADMIN")]
 [Route("api/[controller]")]
 [ApiController]
 public class RecruiterController : ControllerBase
 {
     private readonly SkillMatchDbContext _context;
-    private readonly MatchingEngine _matcher = new();
+    private readonly MatchingEngine _matcher;
 
-    public RecruiterController(SkillMatchDbContext context)
+    public RecruiterController(SkillMatchDbContext context, MatchingEngine matcher)
     {
         _context = context;
+        _matcher = matcher;
     }
 
     // 1. CREATE JOB POSTING (FR-12, FR-13)
@@ -31,26 +34,34 @@ public class RecruiterController : ControllerBase
             Description = request.Description,
             MinExperienceYears = request.MinExperienceYears,
             JobType = request.JobType,
-            Status = "ACTIVE"
+            Status = "ACTIVE",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
         };
 
         _context.Jobs.Add(job);
         await _context.SaveChangesAsync();
 
         // Map required skills
-        foreach (var skillName in request.RequiredSkills)
+        foreach (var reqSkill in request.RequiredSkills)
         {
-            var skill = await _context.Skills.FirstOrDefaultAsync(s => s.Name == skillName)
+            var skillName = reqSkill.Name;
+            var isMandatory = reqSkill.IsMandatory;
+
+            var skill = await _context.Skills.FirstOrDefaultAsync(s => s.Name.ToLower() == skillName.ToLower())
                         ?? new Skill { Name = skillName, Category = "Technical" };
 
-            if (skill.Id == 0) _context.Skills.Add(skill);
-            await _context.SaveChangesAsync();
+            if (skill.Id == 0)
+            {
+                _context.Skills.Add(skill);
+                await _context.SaveChangesAsync();
+            }
 
             _context.JobSkills.Add(new JobSkill
             {
                 JobId = job.Id,
                 SkillId = skill.Id,
-                IsMandatory = true
+                IsMandatory = isMandatory
             });
         }
         await _context.SaveChangesAsync();
@@ -69,7 +80,11 @@ public class RecruiterController : ControllerBase
 
         if (job == null) return NotFound("Job not found.");
 
-        var requiredSkills = job.JobSkills.Select(s => s.Skill.Name).ToList();
+        var requiredSkillInputs = job.JobSkills.Select(s => new JobSkillInput
+        {
+            SkillName = s.Skill.Name,
+            IsMandatory = s.IsMandatory ?? true
+        }).ToList();
 
         // Get all candidates who applied to this job
         var applications = await _context.Applications
@@ -79,33 +94,43 @@ public class RecruiterController : ControllerBase
             .Where(a => a.JobId == jobId)
             .ToListAsync();
 
-        var rankedList = new List<object>();
+        var rankedList = new List<RankedCandidateDto>();
 
         foreach (var app in applications)
         {
-            var candidateSkills = app.Candidate.CandidateSkills.Select(s => s.Skill.Name).ToList();
+            if (app.Candidate == null) continue;
 
-            // Run the matching algorithm dynamically
-            var report = _matcher.Evaluate(
-                candidateSkills,
-                requiredSkills,
+            var candidateSkillInputs = app.Candidate.CandidateSkills.Select(s => new CandidateSkillInput
+            {
+                SkillName = s.Skill.Name,
+                YearsExperience = s.YearsExperience ?? app.Candidate.TotalExperienceYears ?? 0
+            }).ToList();
+
+            var report = _matcher.EvaluateDetailed(
+                candidateSkillInputs,
+                requiredSkillInputs,
                 app.Candidate.TotalExperienceYears ?? 0,
                 job.MinExperienceYears ?? 0);
 
-            rankedList.Add(new
+            rankedList.Add(new RankedCandidateDto
             {
                 ApplicationId = app.Id,
                 CandidateId = app.Candidate.Id,
-                Name = app.Candidate.FullName,
-                Status = app.Status,
+                Name = app.Candidate?.FullName ?? string.Empty,
+                Status = app.Status ?? "APPLIED",
                 OverallMatchScore = report.OverallScore,
+                SkillScore = report.SkillScore,
+                ExperienceScore = report.ExperienceScore,
+                HasAllMandatorySkills = report.HasAllMandatorySkills,
                 MatchedSkillsCount = report.MatchedSkills.Count,
-                MissingSkills = report.MissingSkills
+                MissingSkills = report.MissingSkills,
+                MissingMandatorySkills = report.MissingMandatorySkills,
+                Explanation = report.Explanation
             });
         }
 
         // Rank highest score first
-        var sortedRanking = rankedList.OrderByDescending(r => (decimal)((dynamic)r).OverallMatchScore).ToList();
+        var sortedRanking = rankedList.OrderByDescending(r => r.OverallMatchScore).ToList();
 
         return Ok(sortedRanking);
     }
@@ -137,7 +162,12 @@ public class RecruiterController : ControllerBase
             .FirstOrDefaultAsync(j => j.Id == request.JobId);
 
         if (job == null) return NotFound("Job not found.");
-        var requiredSkills = job.JobSkills.Select(s => s.Skill.Name).ToList();
+
+        var requiredSkillInputs = job.JobSkills.Select(s => new JobSkillInput
+        {
+            SkillName = s.Skill.Name,
+            IsMandatory = s.IsMandatory ?? true
+        }).ToList();
 
         var candidates = await _context.CandidateProfiles
             .Include(c => c.CandidateSkills)
@@ -147,8 +177,17 @@ public class RecruiterController : ControllerBase
 
         var comparisonResult = candidates.Select(c =>
         {
-            var cSkills = c.CandidateSkills.Select(s => s.Skill.Name).ToList();
-            var report = _matcher.Evaluate(cSkills, requiredSkills, c.TotalExperienceYears ?? 0, job.MinExperienceYears ?? 0);
+            var cSkillInputs = c.CandidateSkills.Select(s => new CandidateSkillInput
+            {
+                SkillName = s.Skill.Name,
+                YearsExperience = s.YearsExperience ?? c.TotalExperienceYears ?? 0
+            }).ToList();
+
+            var report = _matcher.EvaluateDetailed(
+                cSkillInputs,
+                requiredSkillInputs,
+                c.TotalExperienceYears ?? 0,
+                job.MinExperienceYears ?? 0);
 
             return new
             {
@@ -156,7 +195,11 @@ public class RecruiterController : ControllerBase
                 Name = c.FullName,
                 Experience = c.TotalExperienceYears,
                 OverallScore = report.OverallScore,
+                SkillScore = report.SkillScore,
+                ExperienceScore = report.ExperienceScore,
+                HasAllMandatorySkills = report.HasAllMandatorySkills,
                 MissingSkills = report.MissingSkills,
+                MissingMandatorySkills = report.MissingMandatorySkills,
                 Explanation = report.Explanation
             };
         });
@@ -165,18 +208,39 @@ public class RecruiterController : ControllerBase
     }
 }
 
-// DTOs for the incoming JSON requests
+public class JobSkillRequirementDto
+{
+    public string Name { get; set; } = string.Empty;
+    public bool IsMandatory { get; set; } = true;
+}
+
 public class JobCreationDto
 {
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public decimal MinExperienceYears { get; set; }
     public string JobType { get; set; } = "FULL_TIME";
-    public List<string> RequiredSkills { get; set; } = new();
+    public List<JobSkillRequirementDto> RequiredSkills { get; set; } = new();
 }
 
 public class CompareRequestDto
 {
     public ulong JobId { get; set; }
     public List<ulong> CandidateIds { get; set; } = new();
+}
+
+public class RankedCandidateDto
+{
+    public ulong ApplicationId { get; set; }
+    public ulong CandidateId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public decimal OverallMatchScore { get; set; }
+    public decimal SkillScore { get; set; }
+    public decimal ExperienceScore { get; set; }
+    public bool HasAllMandatorySkills { get; set; }
+    public int MatchedSkillsCount { get; set; }
+    public List<string> MissingSkills { get; set; } = new();
+    public List<string> MissingMandatorySkills { get; set; } = new();
+    public string Explanation { get; set; } = string.Empty;
 }

@@ -1,9 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SkillMatch.API.Models;
 
 namespace SkillMatch.API.Controllers;
 
+[Authorize(Roles = "ADMIN")]
 [Route("api/[controller]")]
 [ApiController]
 public class AdminController : ControllerBase
