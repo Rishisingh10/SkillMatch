@@ -230,6 +230,25 @@ The API follows the standard ASP.NET Core controller structure:
 /api/Admin
 ```
 
+## Authentication & Authorization
+
+SkillMatch uses JWT-based authentication and role-based authorization.
+
+Available roles:
+
+CANDIDATE
+RECRUITER
+ADMIN
+Authentication Endpoints :
+
+| Method | Endpoint            | Description                                             | Access |
+| ------ | --------------------| ------------------------------------------------------- | ------ |
+| POST   | /api/Auth/register` | Register a new user as a Candidate, Recruiter, or Admin | Public |
+| POST   | /api/Auth/login`    | Authenticate a user and receive a JWT token             | Public |
+
+After a successful login, the API returns a JWT token along with the user's ID, email, and role.
+Protected endpoints require the appropriate role.
+
 ### Candidate API
 
 Candidate functionality includes resume uploads and candidate-job analysis.
