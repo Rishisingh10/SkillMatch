@@ -24,9 +24,11 @@ builder.Services.AddDbContext<SkillMatchDbContext>(options =>
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 
 // 4. Register Application Services
+builder.Services.AddHttpClient<AIService>();
 builder.Services.AddSingleton<SkillAliasNormalizer>();
 builder.Services.AddScoped<ResumeParserService>();
 builder.Services.AddScoped<MatchingEngine>();
+builder.Services.AddScoped<SemanticMatchingEngine>();
 
 // 5. Configure JWT Authentication
 var jwtSecret = builder.Configuration["Jwt:Secret"] ?? "SkillMatch_Super_Secret_Key_For_JWT_Signing_2026_Minimum_256_Bits!";

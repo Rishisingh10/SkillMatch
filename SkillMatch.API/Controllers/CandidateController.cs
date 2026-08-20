@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -15,18 +16,24 @@ public class CandidateController : ControllerBase
 {
     private readonly SkillMatchDbContext _context;
     private readonly MatchingEngine _matcher;
+    private readonly SemanticMatchingEngine _semanticEngine;
     private readonly ResumeParserService _parser;
+    private readonly AIService _aiService;
     private readonly IWebHostEnvironment _environment;
 
     public CandidateController(
         SkillMatchDbContext context,
         MatchingEngine matcher,
+        SemanticMatchingEngine semanticEngine,
         ResumeParserService parser,
+        AIService aiService,
         IWebHostEnvironment environment)
     {
         _context = context;
         _matcher = matcher;
+        _semanticEngine = semanticEngine;
         _parser = parser;
+        _aiService = aiService;
         _environment = environment;
     }
 
@@ -51,6 +58,19 @@ public class CandidateController : ControllerBase
             return NotFound("Candidate or Job record not found.");
         }
 
+        // Retrieve candidate's latest uploaded resume for semantic similarity calculation
+        var latestResume = await _context.Resumes
+            .Where(r => r.CandidateId == candidateId)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+
+        // 1. Calculate AI Semantic Cosine Similarity Score
+        decimal semanticFitScore = await _semanticEngine.ComputeSemanticFitScoreAsync(
+            candidate,
+            job,
+            latestResume?.ParsedRawText
+        );
+
         var candidateSkills = candidate.CandidateSkills
             .Select(cs => new CandidateSkillInput
             {
@@ -67,12 +87,48 @@ public class CandidateController : ControllerBase
             })
             .ToList();
 
+        // 2. Evaluate Candidate Match Report
         var report = _matcher.EvaluateDetailed(
             candidateSkills,
             requiredJobSkills,
             candidate.TotalExperienceYears ?? 0,
-            job.MinExperienceYears ?? 0
+            job.MinExperienceYears ?? 0,
+            semanticFitScore
         );
+
+        // 3. Persist / Update MatchResult in Database
+        var existingResult = await _context.MatchResults
+            .FirstOrDefaultAsync(m => m.CandidateId == candidateId && m.JobId == jobId);
+
+        if (existingResult == null)
+        {
+            _context.MatchResults.Add(new MatchResult
+            {
+                CandidateId = candidateId,
+                JobId = jobId,
+                OverallMatchScore = report.OverallScore,
+                SkillMatchScore = report.SkillScore,
+                ExperienceFitScore = report.ExperienceScore,
+                SemanticFitScore = report.SemanticFitScore,
+                MatchedSkillsJson = JsonSerializer.Serialize(report.MatchedSkills),
+                MissingSkillsJson = JsonSerializer.Serialize(report.MissingSkills),
+                ExplanationNotes = report.Explanation,
+                ComputedAt = DateTime.UtcNow
+            });
+        }
+        else
+        {
+            existingResult.OverallMatchScore = report.OverallScore;
+            existingResult.SkillMatchScore = report.SkillScore;
+            existingResult.ExperienceFitScore = report.ExperienceScore;
+            existingResult.SemanticFitScore = report.SemanticFitScore;
+            existingResult.MatchedSkillsJson = JsonSerializer.Serialize(report.MatchedSkills);
+            existingResult.MissingSkillsJson = JsonSerializer.Serialize(report.MissingSkills);
+            existingResult.ExplanationNotes = report.Explanation;
+            existingResult.ComputedAt = DateTime.UtcNow;
+        }
+
+        await _context.SaveChangesAsync();
 
         return Ok(new
         {
@@ -85,6 +141,7 @@ public class CandidateController : ControllerBase
                 SkillMatchScore = report.SkillScore,
                 ExperienceFitScore = report.ExperienceScore,
                 SkillProficiencyScore = report.SkillProficiencyScore,
+                SemanticFitScore = report.SemanticFitScore,
                 HasAllMandatorySkills = report.HasAllMandatorySkills
             },
 
@@ -172,7 +229,7 @@ public class CandidateController : ControllerBase
             await file.CopyToAsync(stream);
         }
 
-        // 7. Parse text
+        // 7. Parse raw text
         using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
         {
             extractedText = extension == ".pdf"
@@ -180,35 +237,50 @@ public class CandidateController : ControllerBase
                 : _parser.ExtractTextFromDocx(stream);
         }
 
-        // 8. Extract skills automatically from parsed text against global taxonomy
+        // 8. Run AI-Powered Structured Resume Extraction
+        var aiExtractedData = await _aiService.ExtractStructuredResumeDataAsync(extractedText);
+
+        // Auto-update Candidate Profile with AI parsed fields if empty or baseline
+        if (!string.IsNullOrWhiteSpace(aiExtractedData.Phone)) candidate.Phone = aiExtractedData.Phone;
+        if (!string.IsNullOrWhiteSpace(aiExtractedData.Location)) candidate.Location = aiExtractedData.Location;
+        if (!string.IsNullOrWhiteSpace(aiExtractedData.Headline)) candidate.Headline = aiExtractedData.Headline;
+        if (!string.IsNullOrWhiteSpace(aiExtractedData.EducationLevel)) candidate.EducationLevel = aiExtractedData.EducationLevel;
+        if (aiExtractedData.TotalExperienceYears > 0) candidate.TotalExperienceYears = aiExtractedData.TotalExperienceYears;
+        candidate.UpdatedAt = DateTime.UtcNow;
+
+        // 9. Auto-populate Candidate Skills from AI Extraction & Taxonomy
         var knownSkillEntities = await _context.Skills.ToListAsync();
-        var knownSkillNames = knownSkillEntities.Select(s => s.Name).ToList();
-
-        var extractedSkills = _parser.ExtractSkillsFromText(extractedText, knownSkillNames);
-
-        // Add auto-extracted skills to CandidateSkills if not already present
         var existingSkillIds = candidate.CandidateSkills.Select(cs => cs.SkillId).ToHashSet();
         int newSkillsAdded = 0;
 
-        foreach (var extractedSkillName in extractedSkills)
+        foreach (var item in aiExtractedData.ExtractedSkills)
         {
             var skillEntity = knownSkillEntities.FirstOrDefault(s =>
-                s.Name.Equals(extractedSkillName, StringComparison.OrdinalIgnoreCase));
+                s.Name.Equals(item.SkillName, StringComparison.OrdinalIgnoreCase))
+                ?? new Skill { Name = item.SkillName, Category = "Technical" };
 
-            if (skillEntity != null && !existingSkillIds.Contains(skillEntity.Id))
+            if (skillEntity.Id == 0)
+            {
+                _context.Skills.Add(skillEntity);
+                await _context.SaveChangesAsync();
+                knownSkillEntities.Add(skillEntity);
+            }
+
+            if (!existingSkillIds.Contains(skillEntity.Id))
             {
                 _context.CandidateSkills.Add(new CandidateSkill
                 {
                     CandidateId = candidateId,
                     SkillId = skillEntity.Id,
-                    YearsExperience = candidate.TotalExperienceYears ?? 1.0m,
+                    YearsExperience = item.YearsExperience > 0 ? item.YearsExperience : candidate.TotalExperienceYears ?? 1.0m,
                     IsVerifiedByUser = false
                 });
+                existingSkillIds.Add(skillEntity.Id);
                 newSkillsAdded++;
             }
         }
 
-        // 9. Save resume record & newly extracted skills
+        // 10. Save resume record & newly extracted profile data
         var resumeRecord = new Resume
         {
             CandidateId = candidateId,
@@ -223,17 +295,25 @@ public class CandidateController : ControllerBase
         _context.Resumes.Add(resumeRecord);
         await _context.SaveChangesAsync();
 
-        // 10. Return result
+        // 11. Return result
         var previewLength = Math.Min(extractedText.Length, 200);
 
         return Ok(new
         {
-            Message = "Resume uploaded, verified, and parsed successfully.",
+            Message = "Resume uploaded, verified, and AI-parsed successfully.",
             ResumeId = resumeRecord.Id,
             FileName = resumeRecord.FileName,
             FileType = resumeRecord.FileType,
             ExtractedTextPreview = extractedText.Substring(0, previewLength) + (extractedText.Length > 200 ? "..." : ""),
-            ExtractedSkills = extractedSkills,
+            AiExtractedProfile = new
+            {
+                Headline = candidate.Headline,
+                Phone = candidate.Phone,
+                Location = candidate.Location,
+                EducationLevel = candidate.EducationLevel,
+                TotalExperienceYears = candidate.TotalExperienceYears
+            },
+            ExtractedSkillsCount = aiExtractedData.ExtractedSkills.Count,
             NewSkillsAddedToProfile = newSkillsAdded
         });
     }

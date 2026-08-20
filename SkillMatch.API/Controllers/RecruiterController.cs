@@ -13,11 +13,16 @@ public class RecruiterController : ControllerBase
 {
     private readonly SkillMatchDbContext _context;
     private readonly MatchingEngine _matcher;
+    private readonly SemanticMatchingEngine _semanticEngine;
 
-    public RecruiterController(SkillMatchDbContext context, MatchingEngine matcher)
+    public RecruiterController(
+        SkillMatchDbContext context,
+        MatchingEngine matcher,
+        SemanticMatchingEngine semanticEngine)
     {
         _context = context;
         _matcher = matcher;
+        _semanticEngine = semanticEngine;
     }
 
     // 1. CREATE JOB POSTING (FR-12, FR-13)
@@ -100,6 +105,18 @@ public class RecruiterController : ControllerBase
         {
             if (app.Candidate == null) continue;
 
+            // Fetch candidate's latest resume for Cosine Similarity calculation
+            var latestResume = await _context.Resumes
+                .Where(r => r.CandidateId == app.Candidate.Id)
+                .OrderByDescending(r => r.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            decimal semanticFitScore = await _semanticEngine.ComputeSemanticFitScoreAsync(
+                app.Candidate,
+                job,
+                latestResume?.ParsedRawText
+            );
+
             var candidateSkillInputs = app.Candidate.CandidateSkills.Select(s => new CandidateSkillInput
             {
                 SkillName = s.Skill.Name,
@@ -110,17 +127,19 @@ public class RecruiterController : ControllerBase
                 candidateSkillInputs,
                 requiredSkillInputs,
                 app.Candidate.TotalExperienceYears ?? 0,
-                job.MinExperienceYears ?? 0);
+                job.MinExperienceYears ?? 0,
+                semanticFitScore);
 
             rankedList.Add(new RankedCandidateDto
             {
                 ApplicationId = app.Id,
                 CandidateId = app.Candidate.Id,
-                Name = app.Candidate?.FullName ?? string.Empty,
+                Name = app.Candidate.FullName ?? string.Empty,
                 Status = app.Status ?? "APPLIED",
                 OverallMatchScore = report.OverallScore,
                 SkillScore = report.SkillScore,
                 ExperienceScore = report.ExperienceScore,
+                SemanticFitScore = report.SemanticFitScore,
                 HasAllMandatorySkills = report.HasAllMandatorySkills,
                 MatchedSkillsCount = report.MatchedSkills.Count,
                 MissingSkills = report.MissingSkills,
@@ -175,8 +194,17 @@ public class RecruiterController : ControllerBase
             .Where(c => request.CandidateIds.Contains(c.Id))
             .ToListAsync();
 
-        var comparisonResult = candidates.Select(c =>
+        var comparisonResult = new List<object>();
+
+        foreach (var c in candidates)
         {
+            var latestResume = await _context.Resumes
+                .Where(r => r.CandidateId == c.Id)
+                .OrderByDescending(r => r.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            decimal semanticFitScore = await _semanticEngine.ComputeSemanticFitScoreAsync(c, job, latestResume?.ParsedRawText);
+
             var cSkillInputs = c.CandidateSkills.Select(s => new CandidateSkillInput
             {
                 SkillName = s.Skill.Name,
@@ -187,9 +215,10 @@ public class RecruiterController : ControllerBase
                 cSkillInputs,
                 requiredSkillInputs,
                 c.TotalExperienceYears ?? 0,
-                job.MinExperienceYears ?? 0);
+                job.MinExperienceYears ?? 0,
+                semanticFitScore);
 
-            return new
+            comparisonResult.Add(new
             {
                 CandidateId = c.Id,
                 Name = c.FullName,
@@ -197,12 +226,13 @@ public class RecruiterController : ControllerBase
                 OverallScore = report.OverallScore,
                 SkillScore = report.SkillScore,
                 ExperienceScore = report.ExperienceScore,
+                SemanticFitScore = report.SemanticFitScore,
                 HasAllMandatorySkills = report.HasAllMandatorySkills,
                 MissingSkills = report.MissingSkills,
                 MissingMandatorySkills = report.MissingMandatorySkills,
                 Explanation = report.Explanation
-            };
-        });
+            });
+        }
 
         return Ok(comparisonResult);
     }
@@ -238,6 +268,7 @@ public class RankedCandidateDto
     public decimal OverallMatchScore { get; set; }
     public decimal SkillScore { get; set; }
     public decimal ExperienceScore { get; set; }
+    public decimal SemanticFitScore { get; set; }
     public bool HasAllMandatorySkills { get; set; }
     public int MatchedSkillsCount { get; set; }
     public List<string> MissingSkills { get; set; } = new();

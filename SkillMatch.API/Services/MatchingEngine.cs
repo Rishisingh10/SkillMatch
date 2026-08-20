@@ -18,6 +18,7 @@ public class MatchReport
     public decimal SkillScore { get; set; }
     public decimal ExperienceScore { get; set; }
     public decimal SkillProficiencyScore { get; set; }
+    public decimal SemanticFitScore { get; set; }
     public bool HasAllMandatorySkills { get; set; } = true;
     public List<string> MatchedSkills { get; set; } = new();
     public List<string> MissingSkills { get; set; } = new();
@@ -43,7 +44,8 @@ public class MatchingEngine
         List<string> candidateSkills,
         List<string> requiredJobSkills,
         decimal candidateExp,
-        decimal minJobExp)
+        decimal minJobExp,
+        decimal semanticFitScore = 0m)
     {
         var jobSkillInputs = requiredJobSkills
             .Select(s => new JobSkillInput { SkillName = s, IsMandatory = true })
@@ -53,14 +55,15 @@ public class MatchingEngine
             .Select(s => new CandidateSkillInput { SkillName = s, YearsExperience = candidateExp })
             .ToList();
 
-        return EvaluateDetailed(candidateSkillInputs, jobSkillInputs, candidateExp, minJobExp);
+        return EvaluateDetailed(candidateSkillInputs, jobSkillInputs, candidateExp, minJobExp, semanticFitScore);
     }
 
     public MatchReport EvaluateDetailed(
         List<CandidateSkillInput> candidateSkills,
         List<JobSkillInput> requiredJobSkills,
         decimal candidateExp,
-        decimal minJobExp)
+        decimal minJobExp,
+        decimal semanticFitScore = 0m)
     {
         var matched = new List<string>();
         var missing = new List<string>();
@@ -112,11 +115,12 @@ public class MatchingEngine
             ? totalSkillExpScore / matchedCount
             : 0;
 
-        // Base overall score: 60% skill match + 25% overall experience + 15% skill proficiency
+        // Overall score weighting: 50% skill match + 25% experience + 15% skill level proficiency + 10% AI Cosine Similarity
         decimal rawOverallScore =
-            (skillScore * 0.60m) +
+            (skillScore * 0.50m) +
             (overallExpScore * 0.25m) +
-            (skillProficiencyScore * 0.15m);
+            (skillProficiencyScore * 0.15m) +
+            (semanticFitScore * 0.10m);
 
         // Penalty for missing mandatory skills: Apply 50% penalty if mandatory skills missing
         decimal finalOverallScore = hasAllMandatory
@@ -128,7 +132,8 @@ public class MatchingEngine
         string explanation =
             $"Candidate matched {matchedCount}/{requiredJobSkills.Count} required skills " +
             $"(Normalized alias matching enabled). " +
-            $"Fulfills {candidateExp:0.0} of {minJobExp:0.0} required experience years. ";
+            $"Fulfills {candidateExp:0.0} of {minJobExp:0.0} required experience years. " +
+            $"AI Semantic Cosine Similarity Score: {semanticFitScore:0.0}%. ";
 
         if (!hasAllMandatory)
         {
@@ -145,6 +150,7 @@ public class MatchingEngine
             SkillScore = Math.Round(skillScore, 2),
             ExperienceScore = Math.Round(overallExpScore, 2),
             SkillProficiencyScore = Math.Round(skillProficiencyScore, 2),
+            SemanticFitScore = Math.Round(semanticFitScore, 2),
             HasAllMandatorySkills = hasAllMandatory,
             MatchedSkills = matched,
             MissingSkills = missing,
