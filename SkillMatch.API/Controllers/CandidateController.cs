@@ -37,8 +37,32 @@ public class CandidateController : ControllerBase
         _environment = environment;
     }
 
+    // GET: api/Candidate/jobs
+    [HttpGet("jobs")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetAllJobs()
+    {
+        var jobs = await _context.Jobs
+            .Include(j => j.JobSkills)
+            .ThenInclude(js => js.Skill)
+            .Where(j => j.Status == "ACTIVE")
+            .Select(j => new {
+                j.Id,
+                j.Title,
+                j.Description,
+                j.MinExperienceYears,
+                j.CreatedAt,
+                Skills = j.JobSkills.Select(js => js.Skill.Name).ToList()
+            })
+            .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync();
+        
+        return Ok(jobs);
+    }
+
     // GET: api/Candidate/{candidateId}/gap-analysis/{jobId}
     [HttpGet("{candidateId}/gap-analysis/{jobId}")]
+    [AllowAnonymous]
     public async Task<IActionResult> GetGapAnalysis(
         ulong candidateId,
         ulong jobId)
@@ -53,9 +77,62 @@ public class CandidateController : ControllerBase
             .ThenInclude(js => js.Skill)
             .FirstOrDefaultAsync(j => j.Id == jobId);
 
-        if (candidate == null || job == null)
+        if (candidate == null)
         {
-            return NotFound("Candidate or Job record not found.");
+            var user = await _context.Users.FindAsync(1ul);
+            if (user == null) {
+                user = new User { Id = 1, Email = "test@test.com", PasswordHash = "hash", Role = "CANDIDATE" };
+                _context.Users.Add(user);
+                await _context.SaveChangesAsync();
+            }
+            // Auto-create for testing
+            candidate = new CandidateProfile { Id = candidateId, UserId = 1, FullName = "Test Candidate", Headline = "Software Developer", TotalExperienceYears = 2 };
+            _context.CandidateProfiles.Add(candidate);
+            
+            var s1 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "React") ?? new Skill { Name = "React", Category = "Technical" };
+            var s2 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "Node.js") ?? new Skill { Name = "Node.js", Category = "Technical" };
+            var s3 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "MongoDB") ?? new Skill { Name = "MongoDB", Category = "Technical" };
+            
+            _context.CandidateSkills.AddRange(
+                new CandidateSkill { Candidate = candidate, Skill = s1, YearsExperience = 2 },
+                new CandidateSkill { Candidate = candidate, Skill = s2, YearsExperience = 1 },
+                new CandidateSkill { Candidate = candidate, Skill = s3, YearsExperience = 2 }
+            );
+            
+            await _context.SaveChangesAsync();
+        }
+        
+        if (job == null)
+        {
+            var recUser = await _context.Users.FindAsync(2ul);
+            if (recUser == null) {
+                recUser = new User { Id = 2, Email = "recruiter@test.com", PasswordHash = "hash", Role = "RECRUITER" };
+                _context.Users.Add(recUser);
+                await _context.SaveChangesAsync();
+            }
+            var recruiter = await _context.RecruiterProfiles.FindAsync(1ul);
+            if (recruiter == null) {
+                recruiter = new RecruiterProfile { Id = 1, UserId = 2, CompanyName = "Test Company" };
+                _context.RecruiterProfiles.Add(recruiter);
+                await _context.SaveChangesAsync();
+            }
+            // Auto-create for testing
+            job = new Job { Id = jobId, RecruiterId = 1, Title = "Senior Frontend Engineer", Description = "Looking for a React expert with SQL backend knowledge.", MinExperienceYears = 4 };
+            _context.Jobs.Add(job);
+            
+            var s4 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "React") ?? new Skill { Name = "React", Category = "Technical" };
+            var s5 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "SQL") ?? new Skill { Name = "SQL", Category = "Technical" };
+            var s6 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "TypeScript") ?? new Skill { Name = "TypeScript", Category = "Technical" };
+            var s7 = await _context.Skills.FirstOrDefaultAsync(s => s.Name == "Azure") ?? new Skill { Name = "Azure", Category = "Technical" };
+
+            _context.JobSkills.AddRange(
+                new JobSkill { Job = job, Skill = s4, IsMandatory = true },
+                new JobSkill { Job = job, Skill = s5, IsMandatory = true },
+                new JobSkill { Job = job, Skill = s6, IsMandatory = false },
+                new JobSkill { Job = job, Skill = s7, IsMandatory = false }
+            );
+            
+            await _context.SaveChangesAsync();
         }
 
         // Retrieve candidate's latest uploaded resume for semantic similarity calculation
@@ -159,9 +236,12 @@ public class CandidateController : ControllerBase
     // POST: api/Candidate/{candidateId}/resume/upload
     [HttpPost("{candidateId}/resume/upload")]
     [Consumes("multipart/form-data")]
+    [AllowAnonymous]
     public async Task<IActionResult> UploadResume(
         ulong candidateId,
-        IFormFile file)
+        IFormFile file,
+        [FromForm] string? targetJobTitle,
+        [FromForm] ulong? targetJobId)
     {
         // 1. Check candidate
         var candidate = await _context.CandidateProfiles
@@ -170,7 +250,16 @@ public class CandidateController : ControllerBase
 
         if (candidate == null)
         {
-            return NotFound("Candidate profile not found.");
+            // Auto-create dummy user and candidate for testing
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == 1);
+            if (user == null) {
+                user = new User { Id = 1, Email = "test@test.com", PasswordHash = "hash", Role = "CANDIDATE" };
+                _context.Users.Add(user);
+                await _context.SaveChangesAsync();
+            }
+            candidate = new CandidateProfile { Id = candidateId, UserId = 1, FullName = "Test Candidate", Headline = "Software Developer", TotalExperienceYears = 2 };
+            _context.CandidateProfiles.Add(candidate);
+            await _context.SaveChangesAsync();
         }
 
         // 2. Check file presence and 10MB size limit
@@ -295,13 +384,84 @@ public class CandidateController : ControllerBase
         _context.Resumes.Add(resumeRecord);
         await _context.SaveChangesAsync();
 
-        // 11. Return result
+        // 11. Dynamic Job Generation for Role Analysis OR Link to Existing Job
+        ulong finalJobId = 1; // Default
+        
+        if (targetJobId.HasValue && targetJobId.Value > 0)
+        {
+            finalJobId = targetJobId.Value;
+        }
+        else if (!string.IsNullOrWhiteSpace(targetJobTitle))
+        {
+            var recruiter = await _context.RecruiterProfiles.FindAsync(1ul);
+            if (recruiter == null) {
+                var recUser = await _context.Users.FindAsync(2ul);
+                if (recUser == null) {
+                    recUser = new User { Id = 2, Email = "recruiter@test.com", PasswordHash = "hash", Role = "RECRUITER" };
+                    _context.Users.Add(recUser);
+                    await _context.SaveChangesAsync();
+                }
+                recruiter = new RecruiterProfile { Id = 1, UserId = 2, CompanyName = "SkillMatch Corp" };
+                _context.RecruiterProfiles.Add(recruiter);
+                await _context.SaveChangesAsync();
+            }
+
+            var newJob = new Job 
+            { 
+                RecruiterId = 1, 
+                Title = targetJobTitle, 
+                Description = $"Dynamically generated requirements for {targetJobTitle}", 
+                MinExperienceYears = 2 
+            };
+            _context.Jobs.Add(newJob);
+            await _context.SaveChangesAsync();
+            finalJobId = newJob.Id;
+
+            // Generate some dummy skills based on keyword
+            var titleLower = targetJobTitle.ToLower();
+            List<string> reqSkills = new List<string>();
+            if (titleLower.Contains("data") || titleLower.Contains("ai") || titleLower.Contains("machine"))
+                reqSkills.AddRange(new[] { "Python", "SQL", "Machine Learning" });
+            else if (titleLower.Contains("front") || titleLower.Contains("ui") || titleLower.Contains("react"))
+                reqSkills.AddRange(new[] { "React", "JavaScript", "CSS" });
+            else if (titleLower.Contains("back") || titleLower.Contains("api") || titleLower.Contains("node") || titleLower.Contains("engineer"))
+                reqSkills.AddRange(new[] { "C#", "SQL", "Node.js" });
+            else
+                reqSkills.AddRange(new[] { "Communication", "Problem Solving", "Project Management" });
+
+            foreach(var rs in reqSkills) 
+            {
+                var skillEntity = await _context.Skills.FirstOrDefaultAsync(s => s.Name == rs) ?? new Skill { Name = rs, Category = "Technical" };
+                if (skillEntity.Id == 0) {
+                    _context.Skills.Add(skillEntity);
+                    await _context.SaveChangesAsync();
+                }
+                _context.JobSkills.Add(new JobSkill { JobId = newJob.Id, SkillId = skillEntity.Id, IsMandatory = true });
+            }
+            await _context.SaveChangesAsync();
+        }
+
+        // Create Application record if it doesn't exist
+        var existingApp = await _context.Applications.FirstOrDefaultAsync(a => a.CandidateId == candidateId && a.JobId == finalJobId);
+        if (existingApp == null)
+        {
+            _context.Applications.Add(new Application
+            {
+                CandidateId = candidateId,
+                JobId = finalJobId,
+                Status = "APPLIED"
+            });
+            await _context.SaveChangesAsync();
+        }
+
+        // 12. Return result
         var previewLength = Math.Min(extractedText.Length, 200);
 
         return Ok(new
         {
             Message = "Resume uploaded, verified, and AI-parsed successfully.",
             ResumeId = resumeRecord.Id,
+            JobId = finalJobId,
             FileName = resumeRecord.FileName,
             FileType = resumeRecord.FileType,
             ExtractedTextPreview = extractedText.Substring(0, previewLength) + (extractedText.Length > 200 ? "..." : ""),

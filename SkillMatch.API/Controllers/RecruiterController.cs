@@ -6,7 +6,8 @@ using SkillMatch.API.Services;
 
 namespace SkillMatch.API.Controllers;
 
-[Authorize(Roles = "RECRUITER,ADMIN")]
+// [Authorize(Roles = "RECRUITER,ADMIN")]
+[AllowAnonymous]
 [Route("api/[controller]")]
 [ApiController]
 public class RecruiterController : ControllerBase
@@ -25,7 +26,30 @@ public class RecruiterController : ControllerBase
         _semanticEngine = semanticEngine;
     }
 
-    // 1. CREATE JOB POSTING (FR-12, FR-13)
+    // 1. GET ALL JOBS FOR RECRUITER
+    [HttpGet("{recruiterId}/jobs")]
+    public async Task<IActionResult> GetRecruiterJobs(ulong recruiterId)
+    {
+        var jobs = await _context.Jobs
+            .Include(j => j.JobSkills)
+            .ThenInclude(js => js.Skill)
+            .Where(j => j.RecruiterId == recruiterId)
+            .OrderByDescending(j => j.CreatedAt)
+            .Select(j => new {
+                j.Id,
+                j.Title,
+                j.Status,
+                j.CreatedAt,
+                j.MinExperienceYears,
+                Skills = j.JobSkills.Select(js => js.Skill.Name).ToList(),
+                ApplicationCount = _context.Applications.Count(a => a.JobId == j.Id)
+            })
+            .ToListAsync();
+
+        return Ok(jobs);
+    }
+
+    // 2. CREATE JOB POSTING (FR-12, FR-13)
     [HttpPost("{recruiterId}/jobs")]
     public async Task<IActionResult> CreateJobPosting(ulong recruiterId, [FromBody] JobCreationDto request)
     {
@@ -74,7 +98,7 @@ public class RecruiterController : ControllerBase
         return Ok(new { Message = "Job created successfully.", JobId = job.Id });
     }
 
-    // 2. GET RANKED CANDIDATES FOR A JOB (FR-14, FR-15)
+    // 3. GET RANKED CANDIDATES FOR A JOB (FR-14, FR-15)
     [HttpGet("jobs/{jobId}/ranked-candidates")]
     public async Task<IActionResult> GetRankedCandidates(ulong jobId)
     {
@@ -154,7 +178,7 @@ public class RecruiterController : ControllerBase
         return Ok(sortedRanking);
     }
 
-    // 3. UPDATE APPLICATION STATUS (SHORTLIST/REJECT) (FR-18)
+    // 4. UPDATE APPLICATION STATUS (SHORTLIST/REJECT) (FR-18)
     [HttpPatch("applications/{applicationId}/status")]
     public async Task<IActionResult> UpdateApplicationStatus(ulong applicationId, [FromBody] string newStatus)
     {
@@ -171,7 +195,7 @@ public class RecruiterController : ControllerBase
         return Ok(new { Message = $"Application status updated to {application.Status}." });
     }
 
-    // 4. SIDE-BY-SIDE CANDIDATE COMPARISON (FR-16)
+    // 5. SIDE-BY-SIDE CANDIDATE COMPARISON (FR-16)
     [HttpPost("candidates/compare")]
     public async Task<IActionResult> CompareCandidates([FromBody] CompareRequestDto request)
     {

@@ -12,3 +12,8 @@
 appsettings.Development.json
 wwwroot/uploads/*
 !wwwroot/uploads/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+SkillMatch.UI/node_modules/
+SkillMatch.UI/dist/

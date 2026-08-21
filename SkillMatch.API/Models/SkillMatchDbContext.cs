@@ -50,9 +50,7 @@ public partial class SkillMatchDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder
-            .UseCollation("utf8mb4_unicode_ci")
-            .HasCharSet("utf8mb4");
+
 
         modelBuilder.Entity<Application>(entity =>
         {
@@ -67,18 +65,15 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.AppliedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("applied_at");
             entity.Property(e => e.CandidateId).HasColumnName("candidate_id");
             entity.Property(e => e.JobId).HasColumnName("job_id");
             entity.Property(e => e.Status)
                 .HasDefaultValueSql("'APPLIED'")
-                .HasColumnType("enum('APPLIED','IN_REVIEW','SHORTLISTED','REJECTED')")
                 .HasColumnName("status");
             entity.Property(e => e.UpdatedAt)
                 .ValueGeneratedOnAddOrUpdate()
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("updated_at");
 
             entity.HasOne(d => d.Candidate).WithMany(p => p.Applications)
@@ -104,10 +99,8 @@ public partial class SkillMatchDbContext : DbContext
                 .HasColumnName("action");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("created_at");
             entity.Property(e => e.Details)
-                .HasColumnType("text")
                 .HasColumnName("details");
             entity.Property(e => e.IpAddress)
                 .HasMaxLength(45)
@@ -130,11 +123,9 @@ public partial class SkillMatchDbContext : DbContext
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Bio)
-                .HasColumnType("text")
                 .HasColumnName("bio");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("created_at");
             entity.Property(e => e.EducationLevel)
                 .HasMaxLength(100)
@@ -158,7 +149,6 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.UpdatedAt)
                 .ValueGeneratedOnAddOrUpdate()
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("updated_at");
             entity.Property(e => e.UserId).HasColumnName("user_id");
 
@@ -170,8 +160,7 @@ public partial class SkillMatchDbContext : DbContext
         modelBuilder.Entity<CandidateSkill>(entity =>
         {
             entity.HasKey(e => new { e.CandidateId, e.SkillId })
-                .HasName("PRIMARY")
-                .HasAnnotation("MySql:IndexPrefixLength", new[] { 0, 0 });
+                .HasName("PRIMARY");
 
             entity.ToTable("candidate_skills");
 
@@ -212,14 +201,11 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.CategoryId).HasColumnName("category_id");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("created_at");
             entity.Property(e => e.Description)
-                .HasColumnType("mediumtext")
                 .HasColumnName("description");
             entity.Property(e => e.JobType)
                 .HasDefaultValueSql("'FULL_TIME'")
-                .HasColumnType("enum('FULL_TIME','PART_TIME','CONTRACT','REMOTE','HYBRID')")
                 .HasColumnName("job_type");
             entity.Property(e => e.Location)
                 .HasMaxLength(150)
@@ -234,7 +220,6 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.RecruiterId).HasColumnName("recruiter_id");
             entity.Property(e => e.Status)
                 .HasDefaultValueSql("'ACTIVE'")
-                .HasColumnType("enum('DRAFT','ACTIVE','PAUSED','CLOSED')")
                 .HasColumnName("status");
             entity.Property(e => e.Title)
                 .HasMaxLength(200)
@@ -242,7 +227,6 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.UpdatedAt)
                 .ValueGeneratedOnAddOrUpdate()
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("updated_at");
 
             entity.HasOne(d => d.Category).WithMany(p => p.Jobs)
@@ -272,8 +256,7 @@ public partial class SkillMatchDbContext : DbContext
         modelBuilder.Entity<JobSkill>(entity =>
         {
             entity.HasKey(e => new { e.JobId, e.SkillId })
-                .HasName("PRIMARY")
-                .HasAnnotation("MySql:IndexPrefixLength", new[] { 0, 0 });
+                .HasName("PRIMARY");
 
             entity.ToTable("job_skills");
 
@@ -311,20 +294,16 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.CandidateId).HasColumnName("candidate_id");
             entity.Property(e => e.ComputedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("computed_at");
             entity.Property(e => e.ExperienceFitScore)
                 .HasPrecision(5, 2)
                 .HasColumnName("experience_fit_score");
             entity.Property(e => e.ExplanationNotes)
-                .HasColumnType("text")
                 .HasColumnName("explanation_notes");
             entity.Property(e => e.JobId).HasColumnName("job_id");
             entity.Property(e => e.MatchedSkillsJson)
-                .HasColumnType("json")
                 .HasColumnName("matched_skills_json");
             entity.Property(e => e.MissingSkillsJson)
-                .HasColumnType("json")
                 .HasColumnName("missing_skills_json");
             entity.Property(e => e.OverallMatchScore)
                 .HasPrecision(5, 2)
@@ -365,7 +344,6 @@ public partial class SkillMatchDbContext : DbContext
                 .HasColumnName("company_website");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("created_at");
             entity.Property(e => e.Designation)
                 .HasMaxLength(100)
@@ -392,7 +370,6 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.CandidateId).HasColumnName("candidate_id");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("created_at");
             entity.Property(e => e.FileName)
                 .HasMaxLength(255)
@@ -402,14 +379,11 @@ public partial class SkillMatchDbContext : DbContext
                 .HasColumnName("file_path");
             entity.Property(e => e.FileSizeKb).HasColumnName("file_size_kb");
             entity.Property(e => e.FileType)
-                .HasColumnType("enum('PDF','DOCX')")
                 .HasColumnName("file_type");
             entity.Property(e => e.ParsedRawText)
-                .HasColumnType("mediumtext")
                 .HasColumnName("parsed_raw_text");
             entity.Property(e => e.ParsingStatus)
                 .HasDefaultValueSql("'PENDING'")
-                .HasColumnType("enum('PENDING','PROCESSING','COMPLETED','FAILED')")
                 .HasColumnName("parsing_status");
 
             entity.HasOne(d => d.Candidate).WithMany(p => p.Resumes)
@@ -448,7 +422,6 @@ public partial class SkillMatchDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("created_at");
             entity.Property(e => e.Email).HasColumnName("email");
             entity.Property(e => e.IsActive)
@@ -461,12 +434,10 @@ public partial class SkillMatchDbContext : DbContext
                 .HasColumnName("password_hash");
             entity.Property(e => e.Role)
                 .HasDefaultValueSql("'CANDIDATE'")
-                .HasColumnType("enum('CANDIDATE','RECRUITER','ADMIN')")
                 .HasColumnName("role");
             entity.Property(e => e.UpdatedAt)
                 .ValueGeneratedOnAddOrUpdate()
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("timestamp")
                 .HasColumnName("updated_at");
         });
 

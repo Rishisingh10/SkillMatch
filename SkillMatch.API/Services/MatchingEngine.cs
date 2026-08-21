@@ -129,19 +129,40 @@ public class MatchingEngine
 
         finalOverallScore = Math.Round(finalOverallScore, 2);
 
-        string explanation =
-            $"Candidate matched {matchedCount}/{requiredJobSkills.Count} required skills " +
-            $"(Normalized alias matching enabled). " +
-            $"Fulfills {candidateExp:0.0} of {minJobExp:0.0} required experience years. " +
-            $"AI Semantic Cosine Similarity Score: {semanticFitScore:0.0}%. ";
+        // Generate LLM-like explanation
+        var expAnalysis = minJobExp > 0 
+            ? (candidateExp >= minJobExp ? $"strong {candidateExp:0.0} years of experience (exceeding the {minJobExp} year requirement)" : $"only {candidateExp:0.0} years of experience (falling short of the {minJobExp} year requirement)")
+            : $"solid {candidateExp:0.0} years of experience";
 
-        if (!hasAllMandatory)
+        var explanation = $"Based on our AI semantic analysis, this candidate shows potential but requires review. ";
+        
+        if (matched.Count > 0)
         {
-            explanation += $"[WARNING: Lacks {missingMandatory.Count} mandatory skill(s): {string.Join(", ", missingMandatory)}. 50% score penalty applied.]";
+            explanation += $"Strengths: They perfectly match technical requirements like {string.Join(", ", matched)} and bring {expAnalysis}. ";
         }
         else
         {
-            explanation += "Candidate meets all mandatory skill prerequisites.";
+            explanation += $"Strengths: They bring {expAnalysis}, though they lack direct overlap with the core technical stack. ";
+        }
+
+        if (missing.Count > 0)
+        {
+            var missingStr = string.Join(", ", missing);
+            explanation += $"Weaknesses: The most critical gap is their lack of experience with {missingStr}. ";
+            if (missingMandatory.Count > 0)
+            {
+                explanation += $"Specifically, {string.Join(" and ", missingMandatory)} are flagged as mandatory for this position, resulting in a significant match penalty. ";
+            }
+        }
+
+        explanation += "Suggestions: ";
+        if (missing.Count > 0)
+        {
+            explanation += $"For this specific role, we highly recommend upskilling in {missing.First()}. Alternatively, given their current skill set, they might be a better fit for a slightly different role in the organization.";
+        }
+        else
+        {
+            explanation += $"They are a phenomenal fit for this role! We highly recommend moving them forward to the interview stage.";
         }
 
         return new MatchReport

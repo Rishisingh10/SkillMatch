@@ -14,10 +14,7 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 // 2. Register Entity Framework Core
 builder.Services.AddDbContext<SkillMatchDbContext>(options =>
-    options.UseMySql(
-        connectionString,
-        ServerVersion.AutoDetect(connectionString)
-    )
+    options.UseSqlite(connectionString)
 );
 
 // 3. Register Password Hasher
@@ -56,6 +53,13 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
+
+// Configure CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll",
+        b => b.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
 
 // Swagger / OpenAPI Configuration with Bearer Token support
 builder.Services.AddEndpointsApiExplorer();
@@ -99,6 +103,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors("AllowAll");
 
 app.UseAuthentication();
 app.UseAuthorization();
